@@ -1,0 +1,24 @@
+# Segredos e configuração local — só os .env.example são versionados
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Arquivos auxiliares do SQLite (escrita em andamento)
+*.db-journal
+*.db-wal
+*.db-shm
+workout.db
+
+# Local do projeto
+CLAUDE.md
+context.md
+tests/
+specs/
+exercises-dataset/
+

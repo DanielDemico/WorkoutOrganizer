@@ -1,0 +1,19 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
+rapidfuzz>=3.9.0
+pandas>=2.2.0
+openpyxl>=3.1.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.9
+pypdf>=4.3.0
+
+# .xls antigo (pré-2007); pandas exige este engine
+xlrd>=2.0.1
+# redimensionamento de imagem antes do envio ao LLM
+Pillow>=10.4.0
+# converte HEIC (padrão do iPhone) para JPEG
+pillow-heif>=0.18.0
+# rasteriza PDF escaneado; pip puro, sem binário externo
+PyMuPDF>=1.24.0
