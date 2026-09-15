@@ -35,6 +35,7 @@
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Regras que não se quebram](#regras-que-não-se-quebram)
 - [Documentação](#documentação)
+- [Dataset de exercícios](#dataset-de-exercícios)
 
 ---
 
@@ -55,9 +56,10 @@
 
 ## Arquitetura
 
-Três processos e um arquivo SQLite compartilhado. O banco é escrito por **dois donos**
-(os scripts Python de ETL e o EF Core do .NET) e lido por um terceiro (o `document-service`,
-somente-leitura).
+Três processos e um arquivo SQLite compartilhado (`workout.db`, fora do controle de versão —
+veja [Rodando o projeto](#rodando-o-projeto)). O banco tem tabelas de **dataset**, populadas uma
+única vez e hoje só lidas, e tabelas de **aplicação**, geridas por migrations do EF Core; um
+terceiro processo (`document-service`) só lê o banco (`mode=ro`).
 
 ```mermaid
 flowchart LR
@@ -83,13 +85,6 @@ flowchart LR
     DB[("workout.db<br/>SQLite")]
     ASSETS[("images/ · videos/")]
 
-    subgraph ETL["ETL (Python, roda uma vez)"]
-        B1["build_database.py"]
-        B2["build_muscle_mapping.py"]
-        B3["build_translations.py"]
-    end
-    JSON["exercises.json<br/>1324 exercícios"]
-
     SPA -- "JSON + Bearer JWT" --> CTRL
     SPA -- "img / gif" --> STATIC
     CTRL --> EF --> DB
@@ -98,17 +93,13 @@ flowchart LR
     PARSE --> EXTR --> OR
     PARSE --> CAT
     CAT -. "leitura (mode=ro)" .-> DB
-
-    JSON --> B1 --> DB
-    B2 --> DB
-    B3 --> DB
 ```
 
-**Quem escreve o quê em `workout.db`:**
+**Como `workout.db` é dividido:**
 
 ```mermaid
 flowchart TB
-    subgraph DATASET["Tabelas de dataset — donas: scripts Python"]
+    subgraph DATASET["Tabelas de dataset — pré-populadas, hoje só leitura"]
         direction LR
         E["exercises"]
         EI["exercise_instructions<br/>exercise_instruction_steps"]
@@ -129,8 +120,11 @@ flowchart TB
 ```
 
 No EF, as tabelas de dataset são mapeadas com `ToTable(..., t => t.ExcludeFromMigrations())`:
-o .NET lê delas, nunca as recria. A única exceção é `user.refresh_token`, adicionada por
-`ALTER TABLE` escrito à mão dentro de uma migration.
+o .NET lê delas, nunca as recria. Elas foram populadas uma única vez a partir do
+[dataset de exercícios](#dataset-de-exercícios); os scripts que fizeram essa importação não
+fazem mais parte do repositório, então hoje essas tabelas não têm um processo de reconstrução —
+mudar esses dados é edição manual no banco. A única exceção é `user.refresh_token`, adicionada
+por `ALTER TABLE` escrito à mão dentro de uma migration.
 
 ---
 
@@ -248,13 +242,13 @@ sequenceDiagram
     SPA->>SPA: abre a tela de criação já populada, com aviso de revisão
 ```
 
-Decisões que vieram da medição, não da intuição (ver [spec 0008](specs/0008-otimizacao-document-service/spec.md)):
+Decisões que vieram da medição, não da intuição:
 
 - **O fuzzy matching não atribui exercício.** Contra 46 nomes correntes de academia ele acertou
   3 (7%); todo limiar com recall útil admitia falso positivo (`"Remada máquina"` casava 100 com um
   exercício de ombro). Hoje só o *exact match* e o id **escolhido pelo LLM e validado** vinculam.
 - **Exercício sem equivalente é persistido**, não fica pendente: `workout_exercise.custom_name`
-  preenchido, `exercise_id` nulo, marcado na UI como fora do catálogo ([spec 0010](specs/0010-exercicio-fora-do-catalogo/spec.md)).
+  preenchido, `exercise_id` nulo, marcado na UI como fora do catálogo.
 - **Falha de parser nunca degrada para bytes crus no LLM.** Planilha corrompida é `400` com o
   tipo nomeado; `degradedReason` só vem quando o arquivo foi legível como texto simples.
 
@@ -400,6 +394,17 @@ Invariantes garantidos **no banco**, não só no código:
 
 Três terminais. Não há Docker nem script de orquestração.
 
+> **`workout.db` precisa já existir na raiz antes do primeiro `dotnet run`.** Ele está fora do
+> versionamento (`.gitignore`) e nada neste repositório o cria ou o popula — a API só abre o
+> arquivo em `dbPath` (ver [`Program.cs`](backend/WorkoutOrganizer.Api/Program.cs)); se ele não
+> existir, o SQLite cria um arquivo vazio, sem nenhuma tabela, e a aplicação quebra na primeira
+> query. Os scripts que geravam esse banco a partir do dataset de exercícios eram ferramentas de
+> bootstrap de uma vez só e foram removidos depois do import inicial — hoje não há um comando
+> para reconstruir as tabelas de dataset do zero. Se você está clonando este repositório pela
+> primeira vez, precisa trazer um `workout.db` já pronto de outro lugar; só as tabelas de
+> aplicação (`workout`, `workout_exercise`, `workout_exercise_completion`, `exercise_note*`) têm
+> migrations do EF Core (veja abaixo).
+
 ### 1 · API — `http://localhost:5199`
 
 ```bash
@@ -448,18 +453,6 @@ Sem ele, tudo funciona exceto **Importar ficha** — a API responde `503` nessa 
 | `OPENROUTER_FALLBACK_MODEL` | `openai/gpt-4o-mini` | acionado em 429 / 5xx / timeout / JSON inválido |
 | `PORT` / `HOST` | `5200` / `0.0.0.0` | tem de bater com `DocumentService__BaseUrl` no `.env` da API |
 
-### Reconstruir o banco (só quando o dataset ou o mapeamento mudar)
-
-Nesta ordem — `build_database.py` apaga e reimporta as instruções do dataset, o que derrubaria
-as traduções se elas morassem lá; por isso `build_translations.py` escreve em tabelas próprias
-e roda **depois**. Todos são idempotentes.
-
-```bash
-python build_database.py          # exercises.json -> exercises, instructions, steps
-python build_muscle_mapping.py    # muscle_term, muscle_mapping (heatmap)
-python build_translations.py      # exercise_i18n, *_step_i18n, term_i18n
-```
-
 ### Migrations (EF Core) — só tabelas de aplicação
 
 ```bash
@@ -497,11 +490,10 @@ importação à mão — não são testes automatizados.
 
 ```
 WorkoutOrganizer/
-├── workout.db                  SQLite na raiz — fonte única, escrita pelo Python E pelo .NET
-├── exercises.json              dataset original (1324 exercícios)
+├── workout.db                  SQLite na raiz, fora do versionamento — precisa já existir (ver "Rodando o projeto")
+├── exercises.json              dataset original (1324 exercícios) — fonte histórica das tabelas de dataset
 ├── images/  videos/            mídia do dataset, servida pela API em /images e /videos
-├── translations/               JSONs de tradução consumidos por build_translations.py
-├── build_*.py                  ETL: dataset -> banco (idempotentes)
+├── translations/               JSONs de tradução que alimentaram exercise_i18n/term_i18n
 │
 ├── backend/
 │   ├── API.md                  contrato rota a rota
@@ -526,7 +518,6 @@ WorkoutOrganizer/
 │   ├── extractor.py            leitor por tipo de arquivo + chamada ao OpenRouter
 │   └── catalog.py              catálogo em memória (lê workout.db em modo ro) + fuzzy
 │
-├── specs/                      decisões de produto e arquitetura — comece pelo INDEX.md
 ├── context.md                  histórico de como se chegou aqui
 └── CLAUDE.md                   guia operacional do repositório
 ```
@@ -535,18 +526,14 @@ WorkoutOrganizer/
 
 ## Regras que não se quebram
 
-Quatro. Tudo o mais é procedimento e mora em [`specs/INDEX.md`](specs/INDEX.md).
-
 1. **Não cruze os donos do banco.** Tabela de dataset nunca ganha migration EF; tabela de
-   aplicação nunca é criada em script Python. Alterar dataset a partir do .NET só via SQL manual
+   aplicação nunca é criada fora do EF. Alterar dataset a partir do .NET só via SQL manual
    dentro de uma migration, como foi feito para `user.refresh_token`.
 2. **O `userId` vem sempre do token, nunca da requisição.** Isso já foi tentado ao contrário
    e revertido por permitir criar treino em nome de outro usuário.
 3. **Identificador não se traduz.** `workout_exercise.dia`, `muscle_term.term`,
    `MuscleGroupOption.value` e os `muscleId` do SVG são chaves sob contrato — só texto de
    exibição passa por i18n.
-4. **Mudança de comportamento começa por uma spec.** Feature ou alteração de contrato passa
-   por `specs/` primeiro; bug, estilo e refactor sem mudança de contrato não precisam.
 
 ---
 
@@ -555,10 +542,17 @@ Quatro. Tudo o mais é procedimento e mora em [`specs/INDEX.md`](specs/INDEX.md)
 | Documento | O que tem |
 |---|---|
 | [`backend/API.md`](backend/API.md) | Contrato de cada rota: corpo, códigos de status, regras |
-| [`specs/INDEX.md`](specs/INDEX.md) | Uma linha por decisão de produto (0001–0011), com status e divergências entre spec e implementação |
 | [`context.md`](context.md) | Histórico: por que o modelo é assim, o que foi tentado e revertido |
 | [`CLAUDE.md`](CLAUDE.md) | Guia operacional: rodar, testar, invariantes |
-| [`exercises-dataset/README.md`](exercises-dataset/README.md) | Origem e licença do dataset de exercícios |
 
-O dataset de exercícios é de terceiros — veja `exercises-dataset/LICENSE` e `NOTICE.md` antes
-de redistribuir imagens ou vídeos.
+---
+
+## Dataset de exercícios
+
+`exercises.json`, `images/` e `videos/` vêm de terceiros, do
+[exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset) (hasaneyldrm): 1324
+exercícios com categoria, grupo muscular, alvo e instruções, mais GIF de execução e thumbnail
+por exercício. Dados sob MIT, mídia sob termos próprios (© Gym visual) — veja
+[`LICENSE`](https://github.com/hasaneyldrm/exercises-dataset/blob/main/LICENSE) e
+[`NOTICE.md`](https://github.com/hasaneyldrm/exercises-dataset/blob/main/NOTICE.md) no
+repositório original antes de redistribuir imagens ou vídeos.
