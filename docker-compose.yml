@@ -1,16 +1,3 @@
-# WorkoutOrganizer — quatro containers, uma porta publicada.
-#
-#   nginx (gateway, :79)
-#     ├── /                      -> frontend
-#     └── /api, /images, /videos -> backend
-#                                      └── document-service
-#
-# Networks:
-#   web      -> cloudflared <-> nginx
-#   internal -> nginx <-> frontend/backend/document-service
-#
-#   docker compose up -d --build
-
 name: workoutorganizer
 
 services:
