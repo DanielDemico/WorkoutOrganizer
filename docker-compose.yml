@@ -16,8 +16,7 @@ name: workoutorganizer
 services:
 
   nginx:
-    build: ./
-    
+    build: ./nginx
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.workout.rule=Host(`workout.danielcezar.com.br`)"
@@ -29,9 +28,6 @@ services:
         aliases:
           - workout-nginx
       internal:
-
-    ports:
-      - "79:79"
 
     depends_on:
       - frontend
