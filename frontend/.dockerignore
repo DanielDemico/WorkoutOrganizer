@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-ssr/
+
+# VITE_API_URL vem do ARG do Dockerfile; o .env local aponta para localhost:5199.
+.env
+.env.*
+!.env.example
+
+*.log
+.vscode/
+.idea/
+.DS_Store

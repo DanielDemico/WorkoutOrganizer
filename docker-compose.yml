@@ -1,0 +1,83 @@
+# WorkoutOrganizer — quatro containers, uma porta publicada.
+#
+#   nginx (gateway, :${NGINX_PORT})
+#     ├── /            -> frontend         (SPA estático)
+#     └── /api, /images, /videos -> backend (ASP.NET Core)
+#                                      └── document-service (só na rede interna)
+#
+# Segredos continuam nos .env de cada serviço (já ignorados pelo git):
+#   backend/WorkoutOrganizer.Api/.env  -> Jwt__Key
+#   document-service/.env              -> OPENROUTER_API_KEY
+# A porta do gateway vem do .env da raiz (copie .env.example).
+#
+#   docker compose up -d --build
+
+name: workoutorganizer
+
+services:
+  nginx:
+    build: ./nginx
+    ports:
+      # Só o gateway é publicado. 80 já está em uso no servidor, daí o default 8080.
+      - "${NGINX_PORT:-8080}:8080"
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Vazio = URLs relativas; o SPA fala com a própria origem e o nginx roteia.
+        VITE_API_URL: ""
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    env_file:
+      # Jwt__Key mora aqui. O arquivo não entra na imagem (.dockerignore); é lido pelo compose.
+      - ./backend/WorkoutOrganizer.Api/.env
+    environment:
+      # Sobrescreve o localhost:5200 do .env: dentro da rede o serviço tem nome próprio.
+      DocumentService__BaseUrl: http://document-service:5200
+    volumes:
+      # Program.cs resolve o banco como ContentRootPath/../../workout.db = /app/workout.db.
+      # create_host_path: false faz o compose falhar se o arquivo não existir, em vez de
+      # criar silenciosamente um DIRETÓRIO chamado workout.db no host.
+      - type: bind
+        source: ./workout.db
+        target: /app/workout.db
+        bind:
+          create_host_path: false
+      - ./images:/app/images:ro
+      - ./videos:/app/videos:ro
+    depends_on:
+      - document-service
+    restart: unless-stopped
+
+  document-service:
+    build: ./document-service
+    env_file:
+      # OPENROUTER_API_KEY e modelos. Opcional: sem ele o serviço sobe, mas /parse falha (502)
+      # e a importação de ficha fica indisponível — o resto do app funciona normalmente.
+      - path: ./document-service/.env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "5200"
+    volumes:
+      # catalog.py abre em modo ro (file:...?mode=ro); o mount também é ro por garantia.
+      - type: bind
+        source: ./workout.db
+        target: /app/workout.db
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5200/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped

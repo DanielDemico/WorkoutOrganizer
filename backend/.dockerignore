@@ -1,0 +1,12 @@
+# Saídas de build do host — o restore/publish acontece dentro da imagem.
+**/bin/
+**/obj/
+.vs/
+*.user
+
+# Segredos: entram por env_file no compose, nunca na imagem.
+**/.env
+
+# Não fazem parte do binário
+API.md
+*.http

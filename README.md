@@ -392,7 +392,8 @@ Invariantes garantidos **no banco**, não só no código:
 
 ## Rodando o projeto
 
-Três terminais. Não há Docker nem script de orquestração.
+Dois jeitos: **Docker Compose** (quatro containers, uma porta) ou **três terminais** na máquina
+de desenvolvimento. Os dois leem os mesmos `.env` de cada serviço.
 
 > **`workout.db` precisa já existir na raiz antes do primeiro `dotnet run`.** Ele está fora do
 > versionamento (`.gitignore`) e nada neste repositório o cria ou o popula — a API só abre o
@@ -404,6 +405,58 @@ Três terminais. Não há Docker nem script de orquestração.
 > primeira vez, precisa trazer um `workout.db` já pronto de outro lugar; só as tabelas de
 > aplicação (`workout`, `workout_exercise`, `workout_exercise_completion`, `exercise_note*`) têm
 > migrations do EF Core (veja abaixo).
+
+### Com Docker Compose
+
+```bash
+cp .env.example .env                                                            # NGINX_PORT (default 8080)
+cp backend/WorkoutOrganizer.Api/.env.example backend/WorkoutOrganizer.Api/.env  # preencha Jwt__Key
+cp document-service/.env.example document-service/.env                          # preencha OPENROUTER_API_KEY (opcional)
+docker compose up -d --build
+```
+
+Abra <http://localhost:8080>. A porta **não é a 80** de propósito — já existe outro serviço nela
+no servidor; mude em `NGINX_PORT` no `.env` da raiz se 8080 também estiver ocupada.
+
+```
+nginx  :8080  (única porta publicada)
+  ├── /                          -> frontend          nginx estático com o build do Vite
+  ├── /api, /images, /videos     -> backend    :5199  ASP.NET Core
+  └── /openapi, /scalar          -> backend           (só com ASPNETCORE_ENVIRONMENT=Development)
+                                        └── document-service :5200  só na rede interna
+```
+
+| Serviço | Dockerfile | O que precisa saber |
+|---|---|---|
+| `nginx` | [`nginx/`](nginx/) | Gateway. `client_max_body_size 16m` (importação aceita 15 MB) e `proxy_read_timeout 120s` (a API espera até 90 s pelo document-service). Resolve `backend`/`frontend` em tempo de execução, então sobe mesmo que os outros ainda estejam reiniciando. |
+| `frontend` | [`frontend/Dockerfile`](frontend/Dockerfile) | Build multi-stage (`node:24` → `nginx:alpine`) com **`VITE_API_URL=""`**: as URLs ficam relativas (`/api/...`), o SPA fala com a própria origem e não há CORS. `try_files … /index.html` para as rotas do React Router; `/assets/` com cache imutável. |
+| `backend` | [`backend/Dockerfile`](backend/Dockerfile) | `WORKDIR /app/backend/WorkoutOrganizer.Api`, porque o `Program.cs` procura `workout.db`, `images/` e `videos/` em `ContentRootPath/../..` — o compose monta os três em `/app/`. `DocumentService__BaseUrl` é sobrescrito para `http://document-service:5200`. Roda como root para poder escrever no `workout.db` do host. |
+| `document-service` | [`document-service/Dockerfile`](document-service/Dockerfile) | `python:3.12-slim`; `workout.db` montado **somente leitura** (o `catalog.py` já abre em `mode=ro`). Healthcheck em `/health`. Sem `document-service/.env` ele sobe mesmo assim, mas a importação de ficha responde 502. |
+
+Os `.env` de cada serviço **não entram nas imagens** (`.dockerignore`); o compose os lê com
+`env_file` e injeta como variáveis de ambiente, que têm precedência sobre `appsettings.json` e
+sobre o `DotNetEnv`/`python-dotenv`. Para ligar o Scalar dentro do container, acrescente
+`ASPNETCORE_ENVIRONMENT=Development` ao `.env` da API.
+
+Cuidados com o `workout.db` por bind mount:
+
+- **Ele precisa existir antes do `up`.** O mount usa `create_host_path: false`, então o compose
+  falha com erro claro em vez de criar um *diretório* chamado `workout.db`.
+- As migrations **não** rodam no boot; o banco montado precisa já estar migrado
+  (`dotnet ef database update`, na máquina de desenvolvimento).
+- Se você substituir o arquivo (não editar — substituir, por exemplo copiando um novo por cima com
+  outro inode), reinicie os containers: `docker compose restart backend document-service`.
+
+Comandos do dia a dia:
+
+```bash
+docker compose ps                       # estado e healthcheck
+docker compose logs -f backend          # ou nginx / frontend / document-service
+docker compose up -d --build frontend   # rebuild de um serviço só
+docker compose down                     # para e remove os containers (o workout.db fica no host)
+```
+
+### Em três terminais (desenvolvimento)
 
 ### 1 · API — `http://localhost:5199`
 
@@ -517,6 +570,9 @@ WorkoutOrganizer/
 │   ├── main.py                 FastAPI: /health, /parse
 │   ├── extractor.py            leitor por tipo de arquivo + chamada ao OpenRouter
 │   └── catalog.py              catálogo em memória (lê workout.db em modo ro) + fuzzy
+│
+├── nginx/                      gateway do compose: única porta publicada (8080), roteia SPA e API
+├── docker-compose.yml          nginx + frontend + backend + document-service
 │
 ├── context.md                  histórico de como se chegou aqui
 └── CLAUDE.md                   guia operacional do repositório

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OPENROUTER_* entram por env_file no compose, nunca na imagem.
+.env
+.env.*
+!.env.example
