@@ -18,8 +18,7 @@ services:
   nginx:
     build: ./nginx
     ports:
-      # Só o gateway é publicado. 80 já está em uso no servidor, daí o default 8080.
-      - "${NGINX_PORT:-8080}:8080"
+      - "79:79"
     depends_on:
       - frontend
       - backend
